@@ -1,3 +1,12 @@
+# Unreleased
+
+## Compatibility
+
+- Declare the host-provided `typebox` package as a wildcard peer dependency, matching Pi 0.99.1's extension packaging requirements and resolving its dependency warning.
+- Update the lockfile's dependency metadata while retaining the existing locked version.
+
+---
+
 # Release v2.8.0
 
 ## 🚀 New Features
