@@ -1,20 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { streamOpenAICodexResponsesMock } = vi.hoisted(() => ({
-	streamOpenAICodexResponsesMock: vi.fn(),
+const { createRuntimeMock, getModelMock, hasConfiguredAuthMock, streamMock } = vi.hoisted(() => ({
+	createRuntimeMock: vi.fn(),
+	getModelMock: vi.fn(),
+	hasConfiguredAuthMock: vi.fn(),
+	streamMock: vi.fn(),
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
-	AuthStorage: {
-		create: () => ({
-			getApiKey: async () => "test-api-key",
-		}),
-	},
-}));
-
-vi.mock("@earendil-works/pi-ai", () => ({
-	getModel: () => ({ id: "gpt-5.4-mini" }),
-	streamOpenAICodexResponses: streamOpenAICodexResponsesMock,
+	ModelRuntime: { create: createRuntimeMock },
 }));
 
 vi.mock("typebox", () => ({
@@ -27,19 +21,59 @@ vi.mock("typebox", () => ({
 }));
 
 beforeEach(() => {
-	streamOpenAICodexResponsesMock.mockReset();
-	streamOpenAICodexResponsesMock.mockReturnValue({
+	createRuntimeMock.mockReset().mockResolvedValue({
+		getModel: getModelMock,
+		hasConfiguredAuth: hasConfiguredAuthMock,
+		stream: streamMock,
+	});
+	getModelMock.mockReset().mockReturnValue({ id: "gpt-5.4-mini" });
+	hasConfiguredAuthMock.mockReset().mockReturnValue(true);
+	streamMock.mockReset();
+	streamMock.mockReturnValue({
 		result: async () => ({ stopReason: "error", errorMessage: "not used in helper tests", content: [] }),
 	});
 });
 
 describe("openai-codex helpers", () => {
+	it("searches through Pi's model runtime using the existing Codex login", async () => {
+		const { searchOpenAICodex } = await import("./backends/openai-codex.ts");
+		const source = { title: "Docs", url: "https://openai.com/", snippet: "Official documentation" };
+		streamMock.mockReturnValue({
+			result: async () => ({
+				stopReason: "toolUse",
+				content: [{
+					type: "toolCall",
+					name: "submit_search_results",
+					arguments: { results: [source] },
+				}],
+			}),
+		});
+
+		const { results } = await searchOpenAICodex("OpenAI documentation", 1, undefined, { model: "gpt-6.1-sol" });
+
+		expect(getModelMock).toHaveBeenCalledWith("openai-codex", "gpt-6.1-sol");
+		expect(hasConfiguredAuthMock).toHaveBeenCalledWith("openai-codex");
+		expect(results).toEqual([{ ...source, content: source.snippet }]);
+		const [, , options] = streamMock.mock.calls[0];
+		expect(options).toMatchObject({ transport: "sse", reasoningEffort: "minimal" });
+		expect(options.signal).toBeInstanceOf(AbortSignal);
+		expect(createRuntimeMock).toHaveBeenCalledWith({ signal: options.signal });
+	});
+
+	it("reports a missing Codex login before sending a search", async () => {
+		const { searchOpenAICodex } = await import("./backends/openai-codex.ts");
+		hasConfiguredAuthMock.mockReturnValue(false);
+
+		await expect(searchOpenAICodex("test query", 1)).rejects.toThrow("Run /login and select OpenAI Codex");
+		expect(streamMock).not.toHaveBeenCalled();
+	});
+
 	it("searchOpenAICodex asks Codex for rich source-grounded snippets", async () => {
 		const { searchOpenAICodex } = await import("./backends/openai-codex.ts");
 
 		await expect(searchOpenAICodex("test query", 3)).rejects.toThrow("not used in helper tests");
 
-		const [, context] = streamOpenAICodexResponsesMock.mock.calls[0];
+		const [, context] = streamMock.mock.calls[0];
 		const submitTool = context.tools[0];
 		const resultSchema = submitTool.parameters.results.value;
 

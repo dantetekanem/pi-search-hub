@@ -1,10 +1,5 @@
-import { AuthStorage } from "@earendil-works/pi-coding-agent";
-import {
-	getModel,
-	streamOpenAICodexResponses,
-	type Context,
-	type Model,
-} from "@earendil-works/pi-ai";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { Context } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
 import { timeoutSignal } from "../utils.js";
@@ -48,9 +43,14 @@ export async function searchOpenAICodex(
 		throw new Error("OpenAI Codex search cancelled");
 	}
 
-	const apiKey = await resolveOpenAICodexAccessToken();
+	const requestSignal = timeoutSignal(signal);
+	const runtime = await ModelRuntime.create({ signal: requestSignal });
+	if (!runtime.hasConfiguredAuth("openai-codex")) {
+		throw new Error("OpenAI Codex authentication not found. Run /login and select OpenAI Codex.");
+	}
+
 	const modelId = backendConfig?.model?.trim() || DEFAULT_MODEL_ID;
-	const model = getModel("openai-codex", modelId) as Model<"openai-codex-responses"> | undefined;
+	const model = runtime.getModel("openai-codex", modelId);
 	if (!model) {
 		throw new Error(`OpenAI Codex model not found: ${modelId}`);
 	}
@@ -67,9 +67,8 @@ export async function searchOpenAICodex(
 		tools: [SUBMIT_SEARCH_RESULTS_TOOL],
 	};
 
-	const message = await streamOpenAICodexResponses(model, context, {
-		apiKey,
-		signal: timeoutSignal(signal),
+	const message = await runtime.stream(model, context, {
+		signal: requestSignal,
 		transport: "sse",
 		reasoningEffort: "minimal",
 		textVerbosity: "low",
@@ -96,19 +95,6 @@ export async function searchOpenAICodex(
 	}
 
 	return { results };
-}
-
-async function resolveOpenAICodexAccessToken(): Promise<string> {
-	const authStorage = AuthStorage.create();
-	const apiKey = await authStorage.getApiKey("openai-codex", {
-		includeFallback: false,
-	});
-
-	if (!apiKey) {
-		throw new Error("OpenAI Codex authentication not found. Run /login and select OpenAI Codex.");
-	}
-
-	return apiKey;
 }
 
 function buildSystemPrompt(numResults: number): string {
